@@ -20,27 +20,14 @@ from protflow.metrics.generic_metric_runner import GenericMetric
 from protflow.metrics.ligand import LigandContacts
 import protflow.tools.rosetta
 import protflow.utils.plotting as plots
-from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile
+#from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile
 
-
-def residue_contacts(max_distance:float, pose:str, target_chain:str, partner_chain:str, target_resnum: int, atom_name:str="CA"):
-    pose = load_structure_from_pdbfile(pose)
-    target = pose[target_chain][target_resnum][atom_name]
-    partner = pose[partner_chain]
-    partner_atms = [atom for atom in partner.get_atoms() if atom.id == atom_name]
-    target_coords = np.array([target.get_coord()])
-    partner_coords = np.array([atom.get_coord() for atom in partner_atms])
-    
-    # calculate complete dgram
-    dgram = np.linalg.norm(target_coords[:, np.newaxis] - partner_coords[np.newaxis, :], axis=-1)
-
-    # return number of contacts
-    return np.sum(dgram > max_distance)
 
 binder_length = 150
 num_cycles = 1
 num_diffs = 100
 hotspot_residues = 'B18,B39,B41,B108,B131'
+hotspot_list = hotspot_residues.split(",")
 
 # setup jobstarters
 cpu_jobstarter = SbatchArrayJobstarter(max_cores=100)
@@ -60,6 +47,7 @@ colabfold = protflow.tools.colabfold.Colabfold(jobstarter=gpu_jobstarter)
 rog_calculator = GenericMetric(module="protflow.utils.metrics", function="calc_rog_of_pdb", jobstarter=small_cpu_jobstarter)
 contacts = LigandContacts(ligand_chain="B", min_dist=0, max_dist=10, atoms=['CA'], jobstarter=small_cpu_jobstarter)
 tm_score_calculator = protflow.metrics.tmscore.TMalign(jobstarter = small_cpu_jobstarter)
+rescontacts_calculator = GenericMetric(module="protflow.utils.metrics", function="residue_contacts", jobstarter=small_cpu_jobstarter)
 
 # import input pdb
 poses = protflow.poses.Poses(poses=["input/egfr_cetuxi.pdb"], work_dir=".", jobstarter=cpu_jobstarter)
@@ -68,15 +56,22 @@ poses = protflow.poses.Poses(poses=["input/egfr_cetuxi.pdb"], work_dir=".", jobs
 diff_opts = f"diffuser.T=50 'contigmap.contigs=[B1-162/0 {binder_length}-{binder_length}]' 'ppi.hotspot_res=[{hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
 
 # run rfdiffusion
-rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=num_diffs, options=diff_opts, fail_on_missing_output_poses=True)
+rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=num_diffs, options=diff_opts, fail_on_missing_output_poses=False)
 
-# calculate rog
+# calculate rog, general contacts and hotspot contacts
 rog_calculator.run(poses=poses, prefix="rfdiff_rog")
 contacts.run(poses=poses, prefix="rfdiff_contacts",)
+for res in hotspot_list:
+    rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": res, "target_atom_names": ["CA"], "parter_atom_names": ["CA"]}
+    rescontacts_calculator.run(poses=poses, prefix=f"hotspot_{res}_contacts", options=rescontact_opts)
+
+# calculate overall hotspot contacts
+poses.df["hotspot_contacts"] = sum([poses.df[f"hotspot_{res}_contacts_data"] for res in hotspot_list])
 
 # filter
 #poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=20, operator="<", prefix="rfdiff_rog", plot=True)
 #poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=5, operator=">", prefix="rfdiff_contacts", plot=True)
+#poses.filter_poses_by_value(score_col="hotspot_contacts", value=20, operator=">", prefix="rfdiff_rog", plot=True)
 
 
 sys.exit()
