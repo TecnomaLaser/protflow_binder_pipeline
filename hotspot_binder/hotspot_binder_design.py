@@ -23,10 +23,19 @@ import protflow.utils.plotting as plots
 from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile
 
 
-def residue_contacts(pose, target_chain, partner_chain: str = None, target_resnum: int = None, partner_atoms: str = None):
+def residue_contacts(max_distance:float, pose:str, target_chain:str, partner_chain:str, target_resnum: int, atom_name:str="CA"):
     pose = load_structure_from_pdbfile(pose)
-    target = pose[target_chain][target_resnum]
-    return None
+    target = pose[target_chain][target_resnum][atom_name]
+    partner = pose[partner_chain]
+    partner_atms = [atom for atom in partner.get_atoms() if atom.id == atom_name]
+    target_coords = np.array([target.get_coord()])
+    partner_coords = np.array([atom.get_coord() for atom in partner_atms])
+    
+    # calculate complete dgram
+    dgram = np.linalg.norm(target_coords[:, np.newaxis] - partner_coords[np.newaxis, :], axis=-1)
+
+    # return number of contacts
+    return np.sum(dgram > max_distance)
 
 binder_length = 150
 num_cycles = 1
