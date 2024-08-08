@@ -2,6 +2,7 @@
 # dependency
 import numpy as np
 import pandas as pd
+import os
 import sys
 import protflow
 import protflow.config
@@ -49,8 +50,8 @@ def main(args):
     rescontacts_calculator = GenericMetric(module="protflow.utils.metrics", function="residue_contacts", jobstarter=small_cpu_jobstarter)
 
     # import input pdb
-    poses = protflow.poses.Poses(poses=["input/egfr_cetuxi.pdb"], work_dir=".", jobstarter=cpu_jobstarter)
-
+    poses = protflow.poses.Poses(poses=args.input_dir, glob_suffix="*pdb", work_dir=args.output_dir, jobstarter=cpu_jobstarter)
+    
     # define diff options
     diff_opts = f"diffuser.T=50 'contigmap.contigs=[B1-162/0 {args.binder_length}-{args.binder_length}]' 'ppi.hotspot_res=[{args.hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
 
@@ -61,16 +62,23 @@ def main(args):
     rog_calculator.run(poses=poses, prefix="rfdiff_rog")
     contacts.run(poses=poses, prefix="rfdiff_contacts",)
     for res in hotspot_list:
-        rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": res, "target_atom_names": ["CA"], "parter_atom_names": ["CA"]}
+        rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:])+args.binder_length, "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
         rescontacts_calculator.run(poses=poses, prefix=f"hotspot_{res}_contacts", options=rescontact_opts)
 
     # calculate overall hotspot contacts
     poses.df["hotspot_contacts"] = sum([poses.df[f"hotspot_{res}_contacts_data"] for res in hotspot_list])
 
     # filter
-    #poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=20, operator="<", prefix="rfdiff_rog", plot=True)
-    #poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=5, operator=">", prefix="rfdiff_contacts", plot=True)
-    #poses.filter_poses_by_value(score_col="hotspot_contacts", value=20, operator=">", prefix="rfdiff_rog", plot=True)
+    poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=20, operator="<", prefix="rfdiff_rog", plot=True)
+    poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=0, operator=">", prefix="rfdiff_contacts", plot=True)
+    poses.filter_poses_by_value(score_col="hotspot_contacts", value=0, operator=">", prefix="rfdiff_hotspots_contacts", plot=True)
+    for res in hotspot_list:
+        poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=0, operator=">", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
+
+    # dump output poses
+    results_dir = "diffusion_results"
+    os.makedirs(results_dir, exist_ok=True)
+    poses.save_poses(results_dir)
 
     if args.skip_optimization:
         #logging.info(f"Skipping optimization. Run concluded, you can probably find the results somewhere around!")
@@ -79,7 +87,7 @@ def main(args):
     # run optimization iteratively
     for cycle in range(1, args.num_opt_cycles +1):
         # thread a sequence on binders
-        mpnn_opts = f"-fixed_residues {' '.join([f'B{i}' for i in range(1, 163)])}"
+        mpnn_opts = f"-fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, 163+args.binder_length)])}"
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # relax poses
