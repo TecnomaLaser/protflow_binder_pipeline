@@ -23,13 +23,10 @@ import protflow.utils.plotting as plots
 #from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile
 
 
-binder_length = 150
-num_cycles = 1
-num_diffs = 100
-hotspot_residues = 'B18,B39,B41,B108,B131'
 
-def main(arguments):
-    hotspot_list = hotspot_residues.split(",")
+
+def main(args):
+    hotspot_list = args.hotspot_residues.split(",")
 
     # setup jobstarters
     cpu_jobstarter = SbatchArrayJobstarter(max_cores=100)
@@ -55,10 +52,10 @@ def main(arguments):
     poses = protflow.poses.Poses(poses=["input/egfr_cetuxi.pdb"], work_dir=".", jobstarter=cpu_jobstarter)
 
     # define diff options
-    diff_opts = f"diffuser.T=50 'contigmap.contigs=[B1-162/0 {binder_length}-{binder_length}]' 'ppi.hotspot_res=[{hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
+    diff_opts = f"diffuser.T=50 'contigmap.contigs=[B1-162/0 {args.binder_length}-{args.binder_length}]' 'ppi.hotspot_res=[{args.hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
 
     # run rfdiffusion
-    rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=num_diffs, options=diff_opts, fail_on_missing_output_poses=False)
+    rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=args.num_diffs, options=diff_opts, fail_on_missing_output_poses=False)
 
     # calculate rog, general contacts and hotspot contacts
     rog_calculator.run(poses=poses, prefix="rfdiff_rog")
@@ -75,12 +72,12 @@ def main(arguments):
     #poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=5, operator=">", prefix="rfdiff_contacts", plot=True)
     #poses.filter_poses_by_value(score_col="hotspot_contacts", value=20, operator=">", prefix="rfdiff_rog", plot=True)
 
-    if arguments.skip_optimization:
+    if args.skip_optimization:
         #logging.info(f"Skipping optimization. Run concluded, you can probably find the results somewhere around!")
         sys.exit(1)
 
     # run optimization iteratively
-    for cycle in range(1, num_cycles +1):
+    for cycle in range(1, args.num_opt_cycles +1):
         # thread a sequence on binders
         mpnn_opts = f"-fixed_residues {' '.join([f'B{i}' for i in range(1, 163)])}"
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
@@ -136,7 +133,11 @@ if __name__ == "__main__":
 
     # general optionals
     argparser.add_argument("--skip_optimization", action="store_true", help="Skip the iterative optimization.")
-
+    argparser.add_argument("--num_diffs", type=int, default=100, help="output_directory")
+    argparser.add_argument("--num_opt_cycles", type=int, default=1, help="output_directory")
+    argparser.add_argument("--hotspot_residues", type=str, default='B18,B39,B41,B108,B131', help="output_directory")
+    argparser.add_argument("--binder_length", type=int, default=150, help="output_directory")
 
     arguments = argparser.parse_args()
     main(arguments)
+
