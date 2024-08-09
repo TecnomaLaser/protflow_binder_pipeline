@@ -22,6 +22,7 @@ from protflow.metrics.generic_metric_runner import GenericMetric
 from protflow.metrics.ligand import LigandContacts
 import protflow.tools.rosetta
 import protflow.utils.plotting as plots
+from protflow.utils.plotting import violinplot_multiple_cols
 #from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile
 
 
@@ -71,15 +72,23 @@ def main(args):
     # calculate overall hotspot contacts
     poses.df["hotspot_contacts"] = sum([poses.df[f"hotspot_{res}_contacts_data"] for res in hotspot_list])
 
+
+    # make some plots of the hotspot_contacts, RFDiffusion output and the secondary structure content
+    cols = ["rfdiff_plddt" , "hotspot_contacts"]
+    cols = cols + [f"hotspot_{res}_contacts_data" for res in hotspot_list]
+    cols = cols + [col for col in poses.df.columns if col.startswith("dssp") and col.endswith("content")]
+    violinplot_multiple_cols(dataframe = poses.df, cols = cols, y_labels =  cols, out_path = os.path.join(poses.plots_dir, "diffusion_scores.png"))
+
     # filter
-    poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=20, operator="<", prefix="rfdiff_rog", plot=True)
+    poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=19, operator="<", prefix="rfdiff_rog", plot=True)
     poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=0, operator=">", prefix="rfdiff_contacts", plot=True)
     poses.filter_poses_by_value(score_col="hotspot_contacts", value=20, operator=">", prefix="rfdiff_hotspots_contacts", plot=True)
+    poses.filter_poses_by_value(score_col="dssp_L_content", value = 0.25, operator="<", prefix = "L_content", plot = True)
     for res in hotspot_list:
         poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=1, operator=">", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
 
     # dump output poses
-    results_dir = "diffusion_results"
+    results_dir = os.path.join(poses.work_dir, "diffusion_results")
     os.makedirs(results_dir, exist_ok=True)
     poses.save_poses(results_dir)
 
