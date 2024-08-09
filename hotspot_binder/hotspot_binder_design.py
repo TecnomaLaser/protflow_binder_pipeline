@@ -15,6 +15,7 @@ import protflow.tools.esmfold
 import protflow.tools.ligandmpnn
 import protflow.metrics.rmsd
 import protflow.metrics.tmscore
+from protflow.metrics.dssp import DSSP
 import protflow.tools.protein_edits
 import protflow.tools.rfdiffusion
 from protflow.metrics.generic_metric_runner import GenericMetric
@@ -48,6 +49,7 @@ def main(args):
     contacts = LigandContacts(ligand_chain="B", min_dist=0, max_dist=10, atoms=['CA'], jobstarter=small_cpu_jobstarter)
     tm_score_calculator = protflow.metrics.tmscore.TMalign(jobstarter = small_cpu_jobstarter)
     rescontacts_calculator = GenericMetric(module="protflow.utils.metrics", function="residue_contacts", jobstarter=small_cpu_jobstarter)
+    dssp = DSSP(jobstarter=small_cpu_jobstarter)
 
     # import input pdb
     poses = protflow.poses.Poses(poses=args.input_dir, glob_suffix="*pdb", work_dir=args.output_dir, jobstarter=cpu_jobstarter)
@@ -60,7 +62,8 @@ def main(args):
 
     # calculate rog, general contacts and hotspot contacts
     rog_calculator.run(poses=poses, prefix="rfdiff_rog")
-    contacts.run(poses=poses, prefix="rfdiff_contacts",)
+    contacts.run(poses=poses, prefix="rfdiff_contacts", normalize_by_num_atoms=False)
+    dssp.run(poses=poses, prefix="dssp")
     for res in hotspot_list:
         rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:])+args.binder_length, "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
         rescontacts_calculator.run(poses=poses, prefix=f"hotspot_{res}_contacts", options=rescontact_opts)
@@ -71,9 +74,9 @@ def main(args):
     # filter
     poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=20, operator="<", prefix="rfdiff_rog", plot=True)
     poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=0, operator=">", prefix="rfdiff_contacts", plot=True)
-    poses.filter_poses_by_value(score_col="hotspot_contacts", value=0, operator=">", prefix="rfdiff_hotspots_contacts", plot=True)
+    poses.filter_poses_by_value(score_col="hotspot_contacts", value=20, operator=">", prefix="rfdiff_hotspots_contacts", plot=True)
     for res in hotspot_list:
-        poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=0, operator=">", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
+        poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=1, operator=">", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
 
     # dump output poses
     results_dir = "diffusion_results"
