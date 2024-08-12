@@ -34,7 +34,7 @@ def main(args):
     # setup jobstarters
     cpu_jobstarter = SbatchArrayJobstarter(max_cores=100)
     small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10)
-    gpu_jobstarter = SbatchArrayJobstarter(max_cores=1, gpus=1)
+    gpu_jobstarter = SbatchArrayJobstarter(max_cores=3, gpus=1)
 
     # set up runners
     rfdiffusion = protflow.tools.rfdiffusion.RFdiffusion(jobstarter = gpu_jobstarter)
@@ -116,13 +116,12 @@ def main(args):
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # relax poses
-        fr_options = "-parser:protocol fastrelax_interaction.xml -beta"
+        fr_options = "-parser:protocol /home/tripp/data/EGFR_binder/hotspot_binder/fastrelax_interaction.xml -beta"
         rosetta.run(poses=poses, prefix=f"cycle_{cycle}_thread_rlx", nstruct=3, options=fr_options, rosetta_application="rosetta_scripts.default.linuxgccrelease")
 
         # calculate composite score
-        poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score", 
-                                            f"cycle_{cycle}_thread_rlx_total_score", f"cycle_{cycle}_thread_rlx_interaction_score"], 
-                                            weights=[1,2,3], plot=True)
+        poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score", f"cycle_{cycle}_thread_rlx_total_score", f"cycle_{cycle}_thread_rlx_interaction_score_interaction_energy"], 
+
 
         # filter to top sequence
         poses.filter_poses_by_rank(n=1, score_col=f"cycle_{cycle}_threading_comp_score", remove_layers=2)
@@ -182,4 +181,3 @@ if __name__ == "__main__":
     argparser.add_argument("--opt_plddt_cutoff_start", type=float, default=70, help="Start value for plddt filter after each optimization cycle. Filter will be ramped from start to end during optimization.")
     arguments = argparser.parse_args()
     main(arguments)
-
