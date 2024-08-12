@@ -87,8 +87,7 @@ def main(args):
     for res in hotspot_list:
         poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=1, operator=">", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
 
-    poses.calculate_composite_score(name="comp_score_before_opt", scoreterms=["rfdiff_rog_data", "hotspot_contacts", "dssp_L_content"], 
-                                            weights=[1,-2,1], plot=True)
+    poses.calculate_composite_score(name="comp_score_before_opt", scoreterms=["rfdiff_rog_data", "hotspot_contacts", "dssp_L_content"], weights=[1,-2,1], plot=True)
 
     poses.filter_poses_by_rank(score_col = "comp_score_before_opt", n = args.num_opt_input_poses, prefix = "comp_score", plot = True)
 
@@ -126,7 +125,7 @@ def main(args):
         poses.filter_poses_by_rank(n=1, score_col=f"cycle_{cycle}_threading_comp_score", remove_layers=2)
 
         # generate sequences for relaxed poses
-        ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_mpnn", nseq=30, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
+        ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_mpnn", nseq=50, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # write .fasta files (including target) for later use
         poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_complex_fasta", update_poses=False)
@@ -156,7 +155,7 @@ def main(args):
 
         # predict complexes
         colabfold_opts = "--num-models 3"
-        colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts, return_top_n_poses=5)
+        colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts, return_top_n_poses=3)
 
         # filter for predictions with good AF2 plddt
         #af2_plddt_cutoff = ramp_cutoff(args.opt_plddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
@@ -175,7 +174,7 @@ if __name__ == "__main__":
     argparser.add_argument("--num_opt_cycles", type=int, default=1, help="output_directory")
     argparser.add_argument("--hotspot_residues", type=str, default='B18,B39,B41,B108,B131', help="output_directory")
     argparser.add_argument("--binder_length", type=int, default=150, help="output_directory")
-    argparser.add_argument("--num_opt_input_poses", type=int, default=50, help="The number of input poses optimized")
+    argparser.add_argument("--num_opt_input_poses", type=int, default=150, help="The number of input poses optimized")
 
     # optimization optionals
     argparser.add_argument("--opt_cycles", type=int, default=3, help="The number of optimization cycles performed.")
