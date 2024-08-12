@@ -140,7 +140,7 @@ def main(args):
         esmfold.run(poses=poses, prefix=f"cycle_{cycle}_esm")
 
         # filter for predictions with high confidence
-        esm_plddt_cutoff = ramp_cutoff(args.opt_lddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
+        esm_plddt_cutoff = ramp_cutoff(args.opt_plddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
         poses.filter_poses_by_value(score_col=f"cycle_{cycle}_esm_plddt", value=esm_plddt_cutoff, operator=">", prefix=f"cycle_{cycle}_esm_plddt", plot=True)
 
         # calculate tm score
