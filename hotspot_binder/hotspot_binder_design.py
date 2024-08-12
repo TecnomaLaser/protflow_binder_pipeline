@@ -126,13 +126,16 @@ def main(args):
         poses.filter_poses_by_rank(n=1, score_col=f"cycle_{cycle}_threading_comp_score", remove_layers=2)
 
         # generate sequences for relaxed poses
-        ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_mpnn", nseq=30, model_type="soluble_mpnn", options=mpnn_opts)
+        ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_mpnn", nseq=30, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # write .fasta files (including target) for later use
         poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_complex_fasta", update_poses=False)
 
         # remove target chain
         chain_remover.run(poses=poses, prefix=f"cycle_{cycle}_rm_target", chains=["B"])
+
+        # write .fasta files without target
+        poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_fasta", update_poses=True)
 
         # predict
         esmfold.run(poses=poses, prefix=f"cycle_{cycle}_esm")
