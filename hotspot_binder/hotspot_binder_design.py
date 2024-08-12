@@ -120,9 +120,8 @@ def main(args):
         rosetta.run(poses=poses, prefix=f"cycle_{cycle}_thread_rlx", nstruct=3, options=fr_options, rosetta_application="rosetta_scripts.default.linuxgccrelease")
 
         # calculate composite score
-        poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score", 
-                                            f"cycle_{cycle}_thread_rlx_total_score", f"cycle_{cycle}_thread_rlx_interaction_score_interaction_energy"], 
-                                            weights=[1,2,3], plot=True)
+        poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score", f"cycle_{cycle}_thread_rlx_total_score", f"cycle_{cycle}_thread_rlx_interaction_score_interaction_energy"], 
+
 
         # filter to top sequence
         poses.filter_poses_by_rank(n=1, score_col=f"cycle_{cycle}_threading_comp_score", remove_layers=2)
