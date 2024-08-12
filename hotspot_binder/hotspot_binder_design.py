@@ -34,7 +34,7 @@ def main(args):
     # setup jobstarters
     cpu_jobstarter = SbatchArrayJobstarter(max_cores=100)
     small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10)
-    gpu_jobstarter = SbatchArrayJobstarter(max_cores=1, gpus=1)
+    gpu_jobstarter = SbatchArrayJobstarter(max_cores=3, gpus=1)
 
     # set up runners
     rfdiffusion = protflow.tools.rfdiffusion.RFdiffusion(jobstarter = gpu_jobstarter)
@@ -80,12 +80,17 @@ def main(args):
     violinplot_multiple_cols(dataframe = poses.df, cols = cols, y_labels =  cols, out_path = os.path.join(poses.plots_dir, "diffusion_scores.png"))
 
     # filter
-    poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=19, operator="<", prefix="rfdiff_rog", plot=True)
+    poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=20, operator="<", prefix="rfdiff_rog", plot=True)
     poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=0, operator=">", prefix="rfdiff_contacts", plot=True)
     poses.filter_poses_by_value(score_col="hotspot_contacts", value=20, operator=">", prefix="rfdiff_hotspots_contacts", plot=True)
     poses.filter_poses_by_value(score_col="dssp_L_content", value = 0.25, operator="<", prefix = "L_content", plot = True)
     for res in hotspot_list:
         poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=1, operator=">", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
+
+    poses.calculate_composite_score(name="comp_score_before_opt", scoreterms=["rfdiff_rog_data", "hotspot_contacts", "dssp_L_content"], 
+                                            weights=[1,-2,1], plot=True)
+
+    poses.filter_poses_by_rank(score_col = "comp_score_before_opt", n = args.num_opt_input_poses, prefix = "comp_score", plot = True)
 
     # dump output poses
     results_dir = os.path.join(poses.work_dir, "diffusion_results")
@@ -96,18 +101,28 @@ def main(args):
         #logging.info(f"Skipping optimization. Run concluded, you can probably find the results somewhere around!")
         sys.exit(1)
 
+
+    def ramp_cutoff(start_value, end_value, cycle, total_cycles):
+        if total_cycles == 1:
+            return end_value
+        step = (end_value - start_value) / (total_cycles - 1)   
+        return start_value + (cycle - 1) * step
+
+
     # run optimization iteratively
     for cycle in range(1, args.num_opt_cycles +1):
         # thread a sequence on binders
-        mpnn_opts = f"-fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, 163+args.binder_length)])}"
+        mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, 163+args.binder_length)])}"
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # relax poses
-        fr_options = "-parser:protocol fastrelax_interaction.xml -beta"
-        rosetta.run(poses=poses, prefix=f"cycle_{cycle}_thread_rlx", nstruct=3, options=fr_options)
+        fr_options = "-parser:protocol /home/tripp/data/EGFR_binder/hotspot_binder/fastrelax_interaction.xml -beta"
+        rosetta.run(poses=poses, prefix=f"cycle_{cycle}_thread_rlx", nstruct=3, options=fr_options, rosetta_application="rosetta_scripts.default.linuxgccrelease")
 
         # calculate composite score
-        poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score", f"cycle_{cycle}_thread_rlx_total_score", f"cycle_{cycle}_thread_rlx_interaction_score"], weights=[1,2,3], plot=True)
+        poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score", 
+                                            f"cycle_{cycle}_thread_rlx_total_score", f"cycle_{cycle}_thread_rlx_interaction_score_interaction_energy"], 
+                                            weights=[1,2,3], plot=True)
 
         # filter to top sequence
         poses.filter_poses_by_rank(n=1, score_col=f"cycle_{cycle}_threading_comp_score", remove_layers=2)
@@ -125,7 +140,8 @@ def main(args):
         esmfold.run(poses=poses, prefix=f"cycle_{cycle}_esm")
 
         # filter for predictions with high confidence
-        poses.filter_poses_by_value(score_col=f"cycle_{cycle}_esm_plddt", value=80, operator=">", prefix=f"cycle_{cycle}_esm_plddt", plot=True)
+        esm_plddt_cutoff = ramp_cutoff(args.opt_lddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
+        poses.filter_poses_by_value(score_col=f"cycle_{cycle}_esm_plddt", value=esm_plddt_cutoff, operator=">", prefix=f"cycle_{cycle}_esm_plddt", plot=True)
 
         # calculate tm score
         tm_score_calculator.run(poses=poses, prefix=f"cycle_{cycle}_tm", ref_col=f"cycle_{cycle}_thread_rlx_location")
@@ -141,8 +157,9 @@ def main(args):
         colabfold_opts = "--num-models 3"
         colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts, return_top_n_poses=5)
 
-        # filter for predictions with "good" AF2 scores
-        #poses.filter_poses_by_value(score_col=f"cycle_{cycle}_af2_plddt", value=90, operator=">", prefix=f"cycle_{cycle}_plddt", plot=True)
+        # filter for predictions with good AF2 plddt
+        #af2_plddt_cutoff = ramp_cutoff(args.opt_plddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
+        #poses.filter_poses_by_value(score_col=f"cycle_{cycle}_af2_plddt", value=af2_plddt_cutoff, operator=">", prefix=f"cycle_{cycle}_plddt", plot=True)
 
 
 if __name__ == "__main__":
@@ -157,7 +174,11 @@ if __name__ == "__main__":
     argparser.add_argument("--num_opt_cycles", type=int, default=1, help="output_directory")
     argparser.add_argument("--hotspot_residues", type=str, default='B18,B39,B41,B108,B131', help="output_directory")
     argparser.add_argument("--binder_length", type=int, default=150, help="output_directory")
+    argparser.add_argument("--num_opt_input_poses", type=int, default=50, help="The number of input poses optimized")
 
+    # optimization optionals
+    argparser.add_argument("--opt_cycles", type=int, default=3, help="The number of optimization cycles performed.")
+    argparser.add_argument("--opt_plddt_cutoff_end", type=float, default=85, help="End value for plddt filter after each optimization cycle. Filter will be ramped from start to end during optimization.")
+    argparser.add_argument("--opt_plddt_cutoff_start", type=float, default=70, help="Start value for plddt filter after each optimization cycle. Filter will be ramped from start to end during optimization.")
     arguments = argparser.parse_args()
     main(arguments)
-
