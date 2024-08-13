@@ -11,6 +11,7 @@ import protflow.poses
 import protflow.residues
 import protflow.tools
 import protflow.tools.colabfold
+from protflow.tools.colabfold import calculate_poses_interaction_pae
 import protflow.tools.esmfold
 import protflow.tools.ligandmpnn
 import protflow.metrics.rmsd
@@ -109,7 +110,7 @@ def main(args):
 
 
     # run optimization iteratively
-    for cycle in range(1, args.num_opt_cycles +1):
+    for cycle in range(1, args.opt_cycles +1):
         # thread a sequence on binders
         mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, 163+args.binder_length)])}"
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
@@ -162,6 +163,60 @@ def main(args):
         #poses.filter_poses_by_value(score_col=f"cycle_{cycle}_af2_plddt", value=af2_plddt_cutoff, operator=">", prefix=f"cycle_{cycle}_plddt", plot=True)
 
 
+        #### filter which poses are reused in the next cycle: ###
+
+        # first calculate the TM score again:
+        tm_score_calculator.run(poses=poses, prefix=f"cycle_{cycle}_af2_tm", ref_col=f"cycle_{cycle}_thread_rlx_location")
+
+        
+        ## to confirm that the binder is at the correct target position check the hotspot contacts:
+
+        # calculate general contacts and hotspot contacts
+        for res in hotspot_list:
+            rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
+            rescontacts_calculator.run(poses=poses, prefix=f"cycle_{cycle}_hotspot_{res}_contacts", options=rescontact_opts)
+
+        # calculate overall hotspot contacts
+        poses.df[f"cycle_{cycle}_hotspot_contacts"] = sum([poses.df[f"cycle_{cycle}_hotspot_{res}_contacts_data"] for res in hotspot_list])
+        
+        # filter out all poses where the contact between target and binder is not given (defined by at least 20 contacts):
+        poses.filter_poses_by_value(score_col=f"cycle_{cycle}_hotspot_contacts", value=20, operator=">", prefix=f"cycle_{cycle}_rfdiff_hotspots_contacts", plot=True)
+
+        # calculate the PAE interaction:
+        poses = calculate_poses_interaction_pae(prefix=f"cycle_{cycle}", poses=poses, pae_list_col=f"cycle_{cycle}_af2_pae_list", binder_length=150)
+
+        # next, calculate a composite score:
+        poses.calculate_composite_score(
+            name = f"cycle_{cycle}_opt_composite_score",
+            scoreterms = [f"cycle_{cycle}_af2_tm_TM_score_ref", f"cycle_{cycle}_af2_plddt", f"cycle_{cycle}_pae_interaction", f"cycle_{cycle}_af2_iptm"],
+            weights = [-1, -2, 4, -3],
+            plot = True
+        )
+
+        # by removing the index layers we can define how many poses of the same backbone we want
+        layers = 4
+        if cycle > 1:
+            layers += 1
+
+        #filter the poses:
+        poses.filter_poses_by_rank(
+            n = 5,
+            score_col = f"cycle_{cycle}_opt_composite_score",
+            prefix = f"cycle_{cycle}_opt_composite_score",
+            plot = True,
+            remove_layers = layers   
+        )
+
+
+        poses.reindex_poses(prefix=f"cycle_{cycle}_reindex", force_reindex= True, remove_layers = layers)
+
+        # for checking the ouput
+        poses.save_poses(os.path.join(poses.work_dir, f"cycle_{cycle}_output"))
+
+
+
+
+
 if __name__ == "__main__":
     import argparse
     argparser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -171,7 +226,6 @@ if __name__ == "__main__":
     # general optionals
     argparser.add_argument("--skip_optimization", action="store_true", help="Skip the iterative optimization.")
     argparser.add_argument("--num_diffs", type=int, default=100, help="output_directory")
-    argparser.add_argument("--num_opt_cycles", type=int, default=1, help="output_directory")
     argparser.add_argument("--hotspot_residues", type=str, default='B18,B39,B41,B108,B131', help="output_directory")
     argparser.add_argument("--binder_length", type=int, default=150, help="output_directory")
     argparser.add_argument("--num_opt_input_poses", type=int, default=150, help="The number of input poses optimized")
