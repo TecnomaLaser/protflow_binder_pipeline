@@ -150,27 +150,31 @@ def main(args):
         # filter predictions that don't look like design
         poses.filter_poses_by_value(score_col=f"cycle_{cycle}_tm_TM_score_ref", value=0.9, operator=">", prefix=f"cycle_{cycle}_tm_score", plot=True)
 
+        # calculate composite score
+        poses.calculate_composite_score(name=f"cycle_{cycle}_esm_composite_score", scoreterms=[f"cycle_{cycle}_tm_TM_score_ref", f"cycle_{cycle}_esm_plddt"], weights=[-1,-2], plot=True)
+
+        # filter to cycle input poses
+        poses.filter_poses_by_rank(n=15, score_col=f"cycle_{cycle}_esm_composite_score", remove_layers=3, plot=True, prefix=f"cycle_{cycle}_esm_comp_per_bb")
+
+        # filter for maximum number of input poses for af2
+        poses.filter_poses_by_rank(n=1000, score_col=f"cycle_{cycle}_esm_composite_score", prefix=f"cycle_{cycle}_esm_comp", plot=True)
+
         # set .fastas including target as poses
         poses.df["poses"] = poses.df[f"cycle_{cycle}_complex_fasta_fasta_location"]
         poses.parse_descriptions(poses=poses.df["poses"].to_list())
 
         # predict complexes
         colabfold_opts = "--num-models 3"
-        colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts, return_top_n_poses=3)
+        colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts)
 
         # filter for predictions with good AF2 plddt
-        #af2_plddt_cutoff = ramp_cutoff(args.opt_plddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
-        #poses.filter_poses_by_value(score_col=f"cycle_{cycle}_af2_plddt", value=af2_plddt_cutoff, operator=">", prefix=f"cycle_{cycle}_plddt", plot=True)
-
-
-        #### filter which poses are reused in the next cycle: ###
+        af2_plddt_cutoff = ramp_cutoff(args.opt_plddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
+        poses.filter_poses_by_value(score_col=f"cycle_{cycle}_af2_plddt", value=af2_plddt_cutoff, operator=">", prefix=f"cycle_{cycle}_plddt", plot=True)
 
         # first calculate the TM score again:
         tm_score_calculator.run(poses=poses, prefix=f"cycle_{cycle}_af2_tm", ref_col=f"cycle_{cycle}_thread_rlx_location")
 
-        
         ## to confirm that the binder is at the correct target position check the hotspot contacts:
-
         # calculate general contacts and hotspot contacts
         for res in hotspot_list:
             rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
@@ -180,7 +184,7 @@ def main(args):
         poses.df[f"cycle_{cycle}_hotspot_contacts"] = sum([poses.df[f"cycle_{cycle}_hotspot_{res}_contacts_data"] for res in hotspot_list])
         
         # filter out all poses where the contact between target and binder is not given (defined by at least 20 contacts):
-        poses.filter_poses_by_value(score_col=f"cycle_{cycle}_hotspot_contacts", value=20, operator=">", prefix=f"cycle_{cycle}_rfdiff_hotspots_contacts", plot=True)
+        poses.filter_poses_by_value(score_col=f"cycle_{cycle}_hotspot_contacts", value=20, operator=">", prefix=f"cycle_{cycle}_hotspots_contacts", plot=True)
 
         # calculate the PAE interaction:
         poses = calculate_poses_interaction_pae(prefix=f"cycle_{cycle}", poses=poses, pae_list_col=f"cycle_{cycle}_af2_pae_list", binder_length=150)
@@ -188,8 +192,8 @@ def main(args):
         # next, calculate a composite score:
         poses.calculate_composite_score(
             name = f"cycle_{cycle}_opt_composite_score",
-            scoreterms = [f"cycle_{cycle}_af2_tm_TM_score_ref", f"cycle_{cycle}_af2_plddt", f"cycle_{cycle}_pae_interaction", f"cycle_{cycle}_af2_iptm"],
-            weights = [-1, -2, 4, -3],
+            scoreterms = [f"cycle_{cycle}_hotspot_contacts", f"cycle_{cycle}_af2_tm_TM_score_ref", f"cycle_{cycle}_af2_plddt", f"cycle_{cycle}_af2_iptm", f"cycle_{cycle}_pae_interaction", ],
+            weights = [-1, -1, -2, -3, 4],
             plot = True
         )
 
@@ -207,13 +211,10 @@ def main(args):
             remove_layers = layers   
         )
 
-
         poses.reindex_poses(prefix=f"cycle_{cycle}_reindex", force_reindex= True, remove_layers = layers)
 
         # for checking the ouput
         poses.save_poses(os.path.join(poses.work_dir, f"cycle_{cycle}_output"))
-
-
 
 
 
