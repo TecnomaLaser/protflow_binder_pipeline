@@ -163,6 +163,57 @@ def main(args):
         #poses.filter_poses_by_value(score_col=f"cycle_{cycle}_af2_plddt", value=af2_plddt_cutoff, operator=">", prefix=f"cycle_{cycle}_plddt", plot=True)
 
 
+        #### filter which poses are reused in the next cycle: ###
+
+        # first calculate the TM score again:
+        tm_score_calculator.run(poses=poses, prefix=f"cycle_{cycle}_tm_comp", ref_col=f"cycle_{cycle}_thread_rlx_location")
+
+        
+        ## to confirm that the binder is at the correct target position check the hotspot contacts:
+
+        # calculate general contacts and hotspot contacts
+        for res in hotspot_list:
+            rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
+            rescontacts_calculator.run(poses=poses, prefix=f"cycle_{cycle}_hotspot_{res}_contacts", options=rescontact_opts)
+
+        # calculate overall hotspot contacts
+        poses.df[f"cycle_{cycle}_hotspot_contacts"] = sum([poses.df[f"cycle_{cycle}_hotspot_{res}_contacts_data"] for res in hotspot_list])
+        
+        # filter out all poses where the contact between target and binder is not given (defined by at least 20 contacts):
+        poses.filter_poses_by_value(score_col=f"cycle_{cycle}_hotspot_contacts", value=20, operator=">", prefix=f"cycle_{cycle}_rfdiff_hotspots_contacts", plot=True)
+
+        # calculate the PAE interaction:
+        # ...
+
+        # next, calculate a composite score:
+        poses.calculate_composite_score(
+            name = f"cycle_{cycle}_opt_composite_score",
+            scoreterms = [f"cycle_{cycle}_tm_comp", f"cycle_{cycle}_af2_plddt", f"cycle_{cycle}_pae_interaction", f"cycle_{cycle}_af2_iptm"],
+            weights = [1, 1, 3, 1 ],
+            plot = True
+        )
+
+        # by removing the index layers we can define how many poses of the same backbone we want
+        layers = 4
+        if cycle > 1:
+            layers += 1
+
+        #filter the poses:
+        poses.filter_poses_by_rank(
+            n = 5,
+            score_col = f"cycle_{cycle}_opt_composite_score",
+            prefix = f"cycle_{cycle}_opt_composite_score",
+            plot = True,
+            remove_layers = layers   
+        )
+
+
+        poses.reindex_poses(prefix=f"cycle_{cycle}_reindex", force_reindex= True, remove_layers = layers)
+
+
+
+
+
 if __name__ == "__main__":
     import argparse
     argparser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
