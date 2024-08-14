@@ -35,7 +35,7 @@ def main(args):
     # setup jobstarters
     cpu_jobstarter = SbatchArrayJobstarter(max_cores=100)
     small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10)
-    gpu_jobstarter = SbatchArrayJobstarter(max_cores=3, gpus=1)
+    gpu_jobstarter = SbatchArrayJobstarter(max_cores=10, gpus=1)
 
     # set up runners
     rfdiffusion = protflow.tools.rfdiffusion.RFdiffusion(jobstarter = gpu_jobstarter)
