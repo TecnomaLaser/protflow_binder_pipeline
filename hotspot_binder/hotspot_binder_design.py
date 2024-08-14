@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import os
+import logging
 import sys
 import protflow
 import protflow.config
@@ -30,6 +31,13 @@ from protflow.utils.plotting import violinplot_multiple_cols
 
 
 def main(args):
+
+    logging.basicConfig(
+        filename=os.path.join(args.output_dir, "binder_design.log"),
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
     hotspot_list = args.hotspot_residues.split(",")
 
     # setup jobstarters
@@ -154,10 +162,10 @@ def main(args):
         poses.calculate_composite_score(name=f"cycle_{cycle}_esm_composite_score", scoreterms=[f"cycle_{cycle}_tm_TM_score_ref", f"cycle_{cycle}_esm_plddt"], weights=[-1,-2], plot=True)
 
         # filter to cycle input poses
-        poses.filter_poses_by_rank(n=15, score_col=f"cycle_{cycle}_esm_composite_score", remove_layers=3, plot=True, prefix=f"cycle_{cycle}_esm_comp_per_bb")
+        poses.filter_poses_by_rank(n=int(15 / cycle), score_col=f"cycle_{cycle}_esm_composite_score", remove_layers=3, plot=True, prefix=f"cycle_{cycle}_esm_comp_per_bb")
 
-        # filter for maximum number of input poses for af2
-        poses.filter_poses_by_rank(n=1000, score_col=f"cycle_{cycle}_esm_composite_score", prefix=f"cycle_{cycle}_esm_comp", plot=True)
+        # filter for maximum number of input poses for af2 (use less input poses for each cycle as it takes too much time otherwise)
+        poses.filter_poses_by_rank(n=int(1000 / cycle), score_col=f"cycle_{cycle}_esm_composite_score", prefix=f"cycle_{cycle}_esm_comp", plot=True)
 
         # set .fastas including target as poses
         poses.df["poses"] = poses.df[f"cycle_{cycle}_complex_fasta_fasta_location"]
@@ -188,6 +196,8 @@ def main(args):
 
         # calculate the PAE interaction:
         poses = calculate_poses_interaction_pae(prefix=f"cycle_{cycle}", poses=poses, pae_list_col=f"cycle_{cycle}_af2_pae_list", binder_length=150)
+
+        poses.save_scores()
 
         # next, calculate a composite score:
         poses.calculate_composite_score(
