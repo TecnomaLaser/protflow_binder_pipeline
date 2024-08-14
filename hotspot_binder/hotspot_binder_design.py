@@ -211,11 +211,12 @@ def main(args):
             remove_layers = layers   
         )
 
+        poses.df = poses.df.sort_values(f"cycle_{cycle}_opt_composite_score")
         poses.reindex_poses(prefix=f"cycle_{cycle}_reindex", force_reindex= True, remove_layers = layers)
 
         # for checking the ouput
         poses.save_poses(os.path.join(poses.work_dir, f"cycle_{cycle}_output"))
-
+        poses.save_scores(os.path.join(poses.work_dir, f"cycle_{cycle}_scores.json"))
 
 
 if __name__ == "__main__":
