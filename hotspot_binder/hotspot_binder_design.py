@@ -28,7 +28,16 @@ from protflow.utils.plotting import violinplot_multiple_cols
 #from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile
 
 
+def ramp_cutoff(start_value, end_value, cycle, total_cycles) -> float:
+    if total_cycles == 1:
+        return end_value
+    step = (end_value - start_value) / (total_cycles - 1)   
+    return start_value + (cycle - 1) * step
 
+def extract_length_from_contig(contig) -> int:
+    start, end = contig.split("-")
+    length = int(end) - int(start[1:]) +1
+    return length
 
 def main(args):
 
@@ -39,6 +48,7 @@ def main(args):
     )
 
     hotspot_list = args.hotspot_residues.split(",")
+    target_length = extract_length_from_contig(args.target_contig)
 
     # setup jobstarters
     cpu_jobstarter = SbatchArrayJobstarter(max_cores=1000)
@@ -65,7 +75,7 @@ def main(args):
     poses = protflow.poses.Poses(poses=args.input_dir, glob_suffix="*pdb", work_dir=args.output_dir, jobstarter=cpu_jobstarter)
     
     # define diff options
-    diff_opts = f"diffuser.T=50 'contigmap.contigs=[B1-162/0 {args.binder_length}-{args.binder_length}]' 'ppi.hotspot_res=[{args.hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
+    diff_opts = f"diffuser.T=50 'contigmap.contigs=[{args.target_contig}/0 {args.binder_length}-{args.binder_length}]' 'ppi.hotspot_res=[{args.hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
 
     # run rfdiffusion
     rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=args.num_diffs, options=diff_opts, fail_on_missing_output_poses=False)
@@ -75,12 +85,11 @@ def main(args):
     contacts.run(poses=poses, prefix="rfdiff_contacts", normalize_by_num_atoms=False)
     dssp.run(poses=poses, prefix="dssp")
     for res in hotspot_list:
-        rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:])+args.binder_length, "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
+        rescontact_opts={"max_distance": 10, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:])+args.binder_length, "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
         rescontacts_calculator.run(poses=poses, prefix=f"hotspot_{res}_contacts", options=rescontact_opts)
 
     # calculate overall hotspot contacts
     poses.df["hotspot_contacts"] = sum([poses.df[f"hotspot_{res}_contacts_data"] for res in hotspot_list])
-
 
     # make some plots of the hotspot_contacts, RFDiffusion output and the secondary structure content
     cols = ["rfdiff_plddt" , "hotspot_contacts"]
@@ -89,12 +98,12 @@ def main(args):
     violinplot_multiple_cols(dataframe = poses.df, cols = cols, y_labels =  cols, out_path = os.path.join(poses.plots_dir, "diffusion_scores.png"))
 
     # filter
-    poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=20, operator="<", prefix="rfdiff_rog", plot=True)
+    poses.filter_poses_by_value(score_col="rfdiff_rog_data", value=args.rog_cutoff, operator="<=", prefix="rfdiff_rog", plot=True)
     poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=0, operator=">", prefix="rfdiff_contacts", plot=True)
-    poses.filter_poses_by_value(score_col="hotspot_contacts", value=20, operator=">", prefix="rfdiff_hotspots_contacts", plot=True)
+    poses.filter_poses_by_value(score_col="hotspot_contacts", value=args.hotspot_contacts_cutoff, operator=">=", prefix="rfdiff_hotspots_contacts", plot=True)
     poses.filter_poses_by_value(score_col="dssp_L_content", value = 0.25, operator="<", prefix = "L_content", plot = True)
     for res in hotspot_list:
-        poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=1, operator=">", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
+        poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=args.per_hotspot_contacts_cutoff, operator=">=", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
 
     poses.calculate_composite_score(name="comp_score_before_opt", scoreterms=["rfdiff_rog_data", "hotspot_contacts", "dssp_L_content"], weights=[1,-2,1], plot=True)
 
@@ -109,20 +118,15 @@ def main(args):
         #logging.info(f"Skipping optimization. Run concluded, you can probably find the results somewhere around!")
         sys.exit(1)
 
-
-    def ramp_cutoff(start_value, end_value, cycle, total_cycles):
-        if total_cycles == 1:
-            return end_value
-        step = (end_value - start_value) / (total_cycles - 1)   
-        return start_value + (cycle - 1) * step
-
+    ########################################################## OPTIMIZATION ##########################################################
 
     # run optimization iteratively
     for cycle in range(1, args.opt_cycles +1):
+
         # thread a sequence on binders
-        mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, 163+args.binder_length)])}"
+        mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])}"
         if cycle > 1: 
-            mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1, 163)])}"
+            mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1, target_length + 1)])}"
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # relax poses
@@ -174,7 +178,7 @@ def main(args):
         poses.parse_descriptions(poses=poses.df["poses"].to_list())
 
         # predict complexes
-        colabfold_opts = "--num-models 3"
+        colabfold_opts = "--num-models 3 --msa-mode single_sequence"
         colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts)
 
         # filter for predictions with good AF2 plddt
@@ -190,7 +194,7 @@ def main(args):
         ## to confirm that the binder is at the correct target position check the hotspot contacts:
         # calculate general contacts and hotspot contacts
         for res in hotspot_list:
-            rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
+            rescontact_opts={"max_distance": 10, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
             rescontacts_calculator.run(poses=poses, prefix=f"cycle_{cycle}_hotspot_{res}_contacts", options=rescontact_opts)
 
         # calculate overall hotspot contacts
@@ -236,16 +240,24 @@ def main(args):
 
 if __name__ == "__main__":
     import argparse
+    # mandatory
     argparser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    argparser.add_argument("--input_dir", type=str, required=True, help="input_directory that contains all ensemble *.pdb files to be hallucinated (max 1000 files).")
-    argparser.add_argument("--output_dir", type=str, required=True, help="output_directory")
+    argparser.add_argument("--input_dir", type=str, required=True, help="Input directory that contains all ensemble *.pdb files to be hallucinated (max 1000 files).")
+    argparser.add_argument("--output_dir", type=str, required=True, help="Output directory")
+    argparser.add_argument("--hotspot_residues", type=str, required=True, help="Hotspot residues on the target separated by ',' (e.g. 'B18,B39,B41,B108,B131')")
+    argparser.add_argument("--target_contig", type=str, required=True, help="Contig of the target (e.g. B1-162)")
+
+    # filters
+    argparser.add_argument("--per_hotspot_contacts_cutoff", type=int, default=0, help="Minimum number of contacts for each hotspot residue")
+    argparser.add_argument("--rog_cutoff", type=float, default=20, help="Cutoff for radius of gyration post-diffusion.")
+    argparser.add_argument("--hotspot_contacts_cutoff", type=int, default=20, help="Minimum total number of contacts for all hotspot residues")
 
     # general optionals
     argparser.add_argument("--skip_optimization", action="store_true", help="Skip the iterative optimization.")
     argparser.add_argument("--num_diffs", type=int, default=100, help="Number of RFdiffusions.")
-    argparser.add_argument("--hotspot_residues", type=str, default='B18,B39,B41,B108,B131', help="output_directory")
     argparser.add_argument("--binder_length", type=int, default=150, help="Length of the binder.")
     argparser.add_argument("--num_opt_input_poses", type=int, default=150, help="The number of input poses optimized")
+    argparser.add_argument("--binder_cterm_stub", type=str, default=None, help="Add C-terminal residues to sequences pre-AF2 predictions in 1 AA letter code (e.g. MGHHHH)")
 
     # optimization optionals
     argparser.add_argument("--opt_cycles", type=int, default=3, help="The number of optimization cycles performed.")
