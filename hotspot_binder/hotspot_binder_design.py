@@ -41,9 +41,9 @@ def main(args):
     hotspot_list = args.hotspot_residues.split(",")
 
     # setup jobstarters
-    cpu_jobstarter = SbatchArrayJobstarter(max_cores=100)
+    cpu_jobstarter = SbatchArrayJobstarter(max_cores=1000)
     small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10)
-    gpu_jobstarter = SbatchArrayJobstarter(max_cores=10, gpus=1)
+    gpu_jobstarter = SbatchArrayJobstarter(max_cores=20, gpus=1)
 
     # set up runners
     rfdiffusion = protflow.tools.rfdiffusion.RFdiffusion(jobstarter = gpu_jobstarter)
@@ -121,6 +121,8 @@ def main(args):
     for cycle in range(1, args.opt_cycles +1):
         # thread a sequence on binders
         mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, 163+args.binder_length)])}"
+        if cycle > 1: 
+            mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1, 163)])}"
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # relax poses
@@ -172,7 +174,7 @@ def main(args):
         poses.parse_descriptions(poses=poses.df["poses"].to_list())
 
         # predict complexes
-        colabfold_opts = "--num-models 3"
+        colabfold_opts = "--num-models 3 --msa-mode single_sequence"
         colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts)
 
         # filter for predictions with good AF2 plddt
@@ -237,12 +239,12 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     argparser.add_argument("--input_dir", type=str, required=True, help="input_directory that contains all ensemble *.pdb files to be hallucinated (max 1000 files).")
     argparser.add_argument("--output_dir", type=str, required=True, help="output_directory")
+    argparser.add_argument("--hotspot_residues", type=str, required=True, help="output_directory") #B18,B39,B41,B108,B131
 
     # general optionals
     argparser.add_argument("--skip_optimization", action="store_true", help="Skip the iterative optimization.")
-    argparser.add_argument("--num_diffs", type=int, default=100, help="output_directory")
-    argparser.add_argument("--hotspot_residues", type=str, default='B18,B39,B41,B108,B131', help="output_directory")
-    argparser.add_argument("--binder_length", type=int, default=150, help="output_directory")
+    argparser.add_argument("--num_diffs", type=int, default=100, help="Number of RFdiffusions.")
+    argparser.add_argument("--binder_length", type=int, default=150, help="Length of the binder.")
     argparser.add_argument("--num_opt_input_poses", type=int, default=150, help="The number of input poses optimized")
 
     # optimization optionals
