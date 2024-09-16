@@ -35,9 +35,24 @@ def ramp_cutoff(start_value, end_value, cycle, total_cycles) -> float:
     return start_value + (cycle - 1) * step
 
 def extract_length_from_contig(contig) -> int:
-    start, end = contig.split("-")
-    length = int(end) - int(start[1:]) +1
+    chains = contig.split(";")
+    length = 0
+    for chain in chains:
+        start, end = chain.split("-")
+        length += int(end) - int(start[1:]) +1
     return length
+
+def add_sequence_to_fasta(fasta_location:str, sequence_to_add:str) -> None:
+    for fasta in poses.df[fasta_location].to_list():
+        with open (fasta,"r") as f:
+            contents = f.readlines()
+        header = contents[0]
+        sequence = contents[1]
+        # chains are separated by a colon
+        new_content = header + sequence.split(":")[0] + sequence_to_add + ":" + ":".join([f"{i}" for i in sequence.split(":")[1:]])
+        with open(fasta, "w") as f:
+            f.write(new_content)
+
 
 def main(args):
 
@@ -122,11 +137,15 @@ def main(args):
 
     # run optimization iteratively
     for cycle in range(1, args.opt_cycles +1):
+        # after the first cycle the target is the full-length target:
+        if cycle > 1:
+            target_length = 
 
+        # still needs to be modified!!!
         # thread a sequence on binders
         mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])}"
         if cycle > 1: 
-            mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1, target_length + 1)])}"
+            mpnn_opts = f"--fixed_residues {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, target_length + 1)])}"
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # relax poses
@@ -142,14 +161,21 @@ def main(args):
         # generate sequences for relaxed poses
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_mpnn", nseq=50, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
-        # write .fasta files (including target) for later use
         poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_complex_fasta", update_poses=False)
+        
+        # if there is a C terminal stub to add to the binder fasta it is added here in the first cycle:
+        if cycle == 1:
+            add_sequence_to_fasta("cycle_{cycle}_complex_fasta_fasta_location", args.binder_cterm_stub)
+
 
         # remove target chain
         chain_remover.run(poses=poses, prefix=f"cycle_{cycle}_rm_target", chains=["B"])
-
+      
         # write .fasta files without target
         poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_fasta", update_poses=True)
+        # if there is a C terminal stub to add to the binder fasta it is added here in the first cycle:
+        if cycle == 1:
+            add_sequence_to_fasta("cycle_{cycle}_fasta_fasta_location", args.binder_cterm_stub)
 
         # predict
         esmfold.run(poses=poses, prefix=f"cycle_{cycle}_esm")
@@ -245,7 +271,7 @@ if __name__ == "__main__":
     argparser.add_argument("--input_dir", type=str, required=True, help="Input directory that contains all ensemble *.pdb files to be hallucinated (max 1000 files).")
     argparser.add_argument("--output_dir", type=str, required=True, help="Output directory")
     argparser.add_argument("--hotspot_residues", type=str, required=True, help="Hotspot residues on the target separated by ',' (e.g. 'B18,B39,B41,B108,B131')")
-    argparser.add_argument("--target_contig", type=str, required=True, help="Contig of the target (e.g. B1-162)")
+    argparser.add_argument("--target_contig", type=str, required=True, help="Contig of the target (e.g. 'B1-162'  or for a dimer e.g. 'B1-162;C1-120')")
 
     # filters
     argparser.add_argument("--per_hotspot_contacts_cutoff", type=int, default=0, help="Minimum number of contacts for each hotspot residue")
@@ -255,9 +281,13 @@ if __name__ == "__main__":
     # general optionals
     argparser.add_argument("--skip_optimization", action="store_true", help="Skip the iterative optimization.")
     argparser.add_argument("--num_diffs", type=int, default=100, help="Number of RFdiffusions.")
-    argparser.add_argument("--binder_length", type=int, default=150, help="Length of the binder.")
+    argparser.add_argument("--binder_length", type=int, default=80, help="Starting amino acid of the binder.")
+    argparser.add_argument("--binder_start", type=int, default=0, help="Starting amino acid of the binder.")
+    argparser.add_argument("--binder_end", type=int, default=200, help="Last amino acid of the binder")
+    argparser.add_argument("--target_start", type=int, default=81, help="Starting amino acid of the target.")
+    argparser.add_argument("--target_end", type=int, default=200, help="Last amino acid of the target")
     argparser.add_argument("--num_opt_input_poses", type=int, default=150, help="The number of input poses optimized")
-    argparser.add_argument("--binder_cterm_stub", type=str, default=None, help="Add C-terminal residues to sequences pre-AF2 predictions in 1 AA letter code (e.g. MGHHHH)")
+    argparser.add_argument("--binder_cterm_stub", type=str, default="", help="Add C-terminal residues to sequences pre-ESM and pre-AF2 predictions in 1 AA letter code (e.g. MGHHHH). For the 218 linker for the CD20 binder design it is GSTSGSGKPGSGEGSTKG")
 
     # optimization optionals
     argparser.add_argument("--opt_cycles", type=int, default=3, help="The number of optimization cycles performed.")
