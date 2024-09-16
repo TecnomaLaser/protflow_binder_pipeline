@@ -90,7 +90,8 @@ def main(args):
     poses = protflow.poses.Poses(poses=args.input_dir, glob_suffix="*pdb", work_dir=args.output_dir, jobstarter=cpu_jobstarter)
     
     # define diff options
-    diff_opts = f"diffuser.T=50 'contigmap.contigs=[{args.target_contig}/0 {args.binder_length}-{args.binder_length}]' 'ppi.hotspot_res=[{args.hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
+    target_contig = "/0 ".join(args.target_contig.split(";"))
+    diff_opts = f"diffuser.T=50 'contigmap.contigs=[{target_contig}/0 {args.binder_length}-{args.binder_length}]' 'ppi.hotspot_res=[{args.hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
 
     # run rfdiffusion
     rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=args.num_diffs, options=diff_opts, fail_on_missing_output_poses=False)
@@ -139,7 +140,7 @@ def main(args):
     for cycle in range(1, args.opt_cycles +1):
         # after the first cycle the target is the full-length target:
         if cycle > 1:
-            target_length = 
+            target_length = 0
 
         # still needs to be modified!!!
         # thread a sequence on binders
@@ -283,7 +284,7 @@ if __name__ == "__main__":
     argparser.add_argument("--num_diffs", type=int, default=100, help="Number of RFdiffusions.")
     argparser.add_argument("--binder_length", type=int, default=80, help="Starting amino acid of the binder.")
     argparser.add_argument("--binder_start", type=int, default=0, help="Starting amino acid of the binder.")
-    argparser.add_argument("--binder_end", type=int, default=200, help="Last amino acid of the binder")
+    argparser.add_argument("--binder_end", type=int, default=80, help="Last amino acid of the binder")
     argparser.add_argument("--target_start", type=int, default=81, help="Starting amino acid of the target.")
     argparser.add_argument("--target_end", type=int, default=200, help="Last amino acid of the target")
     argparser.add_argument("--num_opt_input_poses", type=int, default=150, help="The number of input poses optimized")
