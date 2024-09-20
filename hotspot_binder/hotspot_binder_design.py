@@ -25,6 +25,7 @@ from protflow.metrics.ligand import LigandContacts
 import protflow.tools.rosetta
 import protflow.utils.plotting as plots
 from protflow.utils.plotting import violinplot_multiple_cols
+from protflow.residues import ResidueSelection, residue_selection
 #from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile
 
 
@@ -56,6 +57,8 @@ def add_sequence_to_fasta(fasta_location:str, sequence_to_add:str) -> None:
 
 def main(args):
 
+    os.makedirs(args.output_dir, exist_ok=True)
+
     logging.basicConfig(
         filename=os.path.join(args.output_dir, "binder_design.log"),
         level=logging.INFO,
@@ -63,12 +66,13 @@ def main(args):
     )
 
     hotspot_list = args.hotspot_residues.split(",")
+    hotspot_residues_original = residue_selection(args.hotspot_residues, delim=",")
     target_length = extract_length_from_contig(args.target_contig)
 
     # setup jobstarters
     cpu_jobstarter = SbatchArrayJobstarter(max_cores=1000)
     small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10)
-    gpu_jobstarter = SbatchArrayJobstarter(max_cores=20, gpus=1)
+    gpu_jobstarter = SbatchArrayJobstarter(max_cores=5, gpus=1)
 
     # set up runners
     rfdiffusion = protflow.tools.rfdiffusion.RFdiffusion(jobstarter = gpu_jobstarter)
@@ -89,19 +93,25 @@ def main(args):
     # import input pdb
     poses = protflow.poses.Poses(poses=args.input_dir, glob_suffix="*pdb", work_dir=args.output_dir, jobstarter=cpu_jobstarter)
     
+    # add hotspot residues to poses df
+    poses.df["hotspot_residues_original"] = [hotspot_residues_original for pose in poses.poses_list()]
+    poses.df["hotspot_residues_postdiffusion"] = [hotspot_residues_original for pose in poses.poses_list()]
+
     # define diff options
     target_contig = "/0 ".join(args.target_contig.split(";"))
     diff_opts = f"diffuser.T=50 'contigmap.contigs=[{target_contig}/0 {args.binder_length}-{args.binder_length}]' 'ppi.hotspot_res=[{args.hotspot_residues}]' inference.ckpt_override_path=/home/tripp/RFdiffusion/models/Complex_beta_ckpt.pt"
 
     # run rfdiffusion
-    rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=args.num_diffs, options=diff_opts, fail_on_missing_output_poses=False)
-
+    num_diffs = int(args.num_diffs / 5) if args.num_diffs / 5 >= 1 else 1
+    rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=num_diffs, multiplex_poses=5, options=diff_opts, fail_on_missing_output_poses=False, update_motifs=["hotspot_residues_postdiffusion"])
+    hotspot_residues_postdiffusion = poses.df["hotspot_residues_postdiffusion"].iloc[0]
+    
     # calculate rog, general contacts and hotspot contacts
     rog_calculator.run(poses=poses, prefix="rfdiff_rog")
     contacts.run(poses=poses, prefix="rfdiff_contacts", normalize_by_num_atoms=False)
     dssp.run(poses=poses, prefix="dssp")
-    for res in hotspot_list:
-        rescontact_opts={"max_distance": 10, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:])+args.binder_length, "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
+    for res in hotspot_residues_postdiffusion.to_list():
+        rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:])+args.binder_length, "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
         rescontacts_calculator.run(poses=poses, prefix=f"hotspot_{res}_contacts", options=rescontact_opts)
 
     # calculate overall hotspot contacts
@@ -154,6 +164,7 @@ def main(args):
         rosetta.run(poses=poses, prefix=f"cycle_{cycle}_thread_rlx", nstruct=3, options=fr_options, rosetta_application="rosetta_scripts.default.linuxgccrelease")
 
         # calculate composite score
+        # replace sap with shape complementarity & interaction area
         poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score", f"cycle_{cycle}_thread_rlx_total_score", f"cycle_{cycle}_thread_rlx_interaction_score_interaction_energy"], weights =  [1,2,3], plot=True) 
 
         # filter to top sequence
@@ -221,7 +232,7 @@ def main(args):
         ## to confirm that the binder is at the correct target position check the hotspot contacts:
         # calculate general contacts and hotspot contacts
         for res in hotspot_list:
-            rescontact_opts={"max_distance": 10, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
+            rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
             rescontacts_calculator.run(poses=poses, prefix=f"cycle_{cycle}_hotspot_{res}_contacts", options=rescontact_opts)
 
         # calculate overall hotspot contacts
@@ -263,6 +274,8 @@ def main(args):
         # for checking the ouput
         poses.save_poses(os.path.join(poses.work_dir, f"cycle_{cycle}_output"))
         poses.save_scores(os.path.join(poses.work_dir, f"cycle_{cycle}_scores.json"))
+
+    # relax all structures & calculate shape complementarity, interaction area & delta scores
 
 
 if __name__ == "__main__":
