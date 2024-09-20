@@ -105,13 +105,13 @@ def main(args):
     num_diffs = int(args.num_diffs / 5) if args.num_diffs / 5 >= 1 else 1
     rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=num_diffs, multiplex_poses=5, options=diff_opts, fail_on_missing_output_poses=False, update_motifs=["hotspot_residues_postdiffusion"])
     hotspot_residues_postdiffusion = poses.df["hotspot_residues_postdiffusion"].iloc[0]
-    
+
     # calculate rog, general contacts and hotspot contacts
     rog_calculator.run(poses=poses, prefix="rfdiff_rog")
     contacts.run(poses=poses, prefix="rfdiff_contacts", normalize_by_num_atoms=False)
     dssp.run(poses=poses, prefix="dssp")
     for res in hotspot_residues_postdiffusion.to_list():
-        rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:])+args.binder_length, "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
+        rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
         rescontacts_calculator.run(poses=poses, prefix=f"hotspot_{res}_contacts", options=rescontact_opts)
 
     # calculate overall hotspot contacts
