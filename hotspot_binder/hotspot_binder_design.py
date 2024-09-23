@@ -84,7 +84,7 @@ def main(args):
     colabfold = protflow.tools.colabfold.Colabfold(jobstarter=gpu_jobstarter)
 
     # set up metrics
-    rog_calculator = GenericMetric(module="protflow.utils.metrics", function="calc_rog_of_pdb", jobstarter=small_cpu_jobstarter)
+    rog_calculator = GenericMetric(module="protflow.utils.metrics", function="calc_rog_of_pdb", options={"chain": "A"}, jobstarter=small_cpu_jobstarter)
     contacts = LigandContacts(ligand_chain="B", min_dist=0, max_dist=10, atoms=['CA'], jobstarter=small_cpu_jobstarter)
     tm_score_calculator = protflow.metrics.tmscore.TMalign(jobstarter = small_cpu_jobstarter)
     rescontacts_calculator = GenericMetric(module="protflow.utils.metrics", function="residue_contacts", jobstarter=small_cpu_jobstarter)
@@ -94,8 +94,8 @@ def main(args):
     poses = protflow.poses.Poses(poses=args.input_dir, glob_suffix="*pdb", work_dir=args.output_dir, jobstarter=cpu_jobstarter)
     
     # add hotspot residues to poses df
-    poses.df["hotspot_residues_original"] = [hotspot_residues_original for pose in poses.poses_list()]
-    poses.df["hotspot_residues_postdiffusion"] = [hotspot_residues_original for pose in poses.poses_list()]
+    poses.df["hotspot_residues_original"] = [hotspot_residues_original for _ in poses.poses_list()]
+    poses.df["hotspot_residues_postdiffusion"] = [hotspot_residues_original for _ in poses.poses_list()]
 
     # define diff options
     target_contig = "/0 ".join(args.target_contig.split(";"))
@@ -105,7 +105,7 @@ def main(args):
     num_diffs = int(args.num_diffs / 5) if args.num_diffs / 5 >= 1 else 1
     rfdiffusion.run(poses=poses, prefix="rfdiff", num_diffusions=num_diffs, multiplex_poses=5, options=diff_opts, fail_on_missing_output_poses=False, update_motifs=["hotspot_residues_postdiffusion"])
     hotspot_residues_postdiffusion = poses.df["hotspot_residues_postdiffusion"].iloc[0]
-
+    
     # calculate rog, general contacts and hotspot contacts
     rog_calculator.run(poses=poses, prefix="rfdiff_rog")
     contacts.run(poses=poses, prefix="rfdiff_contacts", normalize_by_num_atoms=False)
@@ -115,11 +115,11 @@ def main(args):
         rescontacts_calculator.run(poses=poses, prefix=f"hotspot_{res}_contacts", options=rescontact_opts)
 
     # calculate overall hotspot contacts
-    poses.df["hotspot_contacts"] = sum([poses.df[f"hotspot_{res}_contacts_data"] for res in hotspot_list])
+    poses.df["hotspot_contacts"] = sum([poses.df[f"hotspot_{res}_contacts_data"] for res in hotspot_residues_postdiffusion.to_list()])
 
     # make some plots of the hotspot_contacts, RFDiffusion output and the secondary structure content
     cols = ["rfdiff_plddt" , "hotspot_contacts"]
-    cols = cols + [f"hotspot_{res}_contacts_data" for res in hotspot_list]
+    cols = cols + [f"hotspot_{res}_contacts_data" for res in hotspot_residues_postdiffusion.to_list()]
     cols = cols + [col for col in poses.df.columns if col.startswith("dssp") and col.endswith("content")]
     violinplot_multiple_cols(dataframe = poses.df, cols = cols, y_labels =  cols, out_path = os.path.join(poses.plots_dir, "diffusion_scores.png"))
 
@@ -128,7 +128,7 @@ def main(args):
     poses.filter_poses_by_value(score_col="rfdiff_contacts_contacts", value=0, operator=">", prefix="rfdiff_contacts", plot=True)
     poses.filter_poses_by_value(score_col="hotspot_contacts", value=args.hotspot_contacts_cutoff, operator=">=", prefix="rfdiff_hotspots_contacts", plot=True)
     poses.filter_poses_by_value(score_col="dssp_L_content", value = 0.25, operator="<", prefix = "L_content", plot = True)
-    for res in hotspot_list:
+    for res in hotspot_residues_postdiffusion.to_list():
         poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=args.per_hotspot_contacts_cutoff, operator=">=", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
 
     poses.calculate_composite_score(name="comp_score_before_opt", scoreterms=["rfdiff_rog_data", "hotspot_contacts", "dssp_L_content"], weights=[1,-2,1], plot=True)
