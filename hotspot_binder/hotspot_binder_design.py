@@ -188,7 +188,7 @@ def main(args):
 
 
         # remove target chain
-        chain_remover.run(poses=poses, prefix=f"cycle_{cycle}_rm_target", chains=["B"])
+        chain_remover.run(poses=poses, prefix=f"cycle_{cycle}_rm_target", chains=["B","C"])
       
         # write .fasta files without target
         poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_fasta", update_poses=True)
