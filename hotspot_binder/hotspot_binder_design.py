@@ -43,7 +43,8 @@ def extract_length_from_contig(contig) -> int:
         length += int(end) - int(start[1:]) +1
     return length
 
-def add_sequence_to_fasta(fasta_location:str, sequence_to_add:str) -> None:
+
+def add_sequence_to_fasta(poses, fasta_location:str, sequence_to_add:str) -> None:
     for fasta in poses.df[fasta_location].to_list():
         with open (fasta,"r") as f:
             contents = f.readlines()
@@ -64,7 +65,7 @@ def main(args):
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
-
+    
     hotspot_list = args.hotspot_residues.split(",")
     hotspot_residues_original = residue_selection(args.hotspot_residues, delim=",")
     target_length = extract_length_from_contig(args.target_contig)
@@ -141,43 +142,49 @@ def main(args):
     poses.save_poses(results_dir)
 
     if args.skip_optimization:
-        #logging.info(f"Skipping optimization. Run concluded, you can probably find the results somewhere around!")
         sys.exit(1)
 
     ########################################################## OPTIMIZATION ##########################################################
 
     # run optimization iteratively
     for cycle in range(1, args.opt_cycles +1):
-        # after the first cycle the target is the full-length target:
-        if cycle > 1:
-            target_length = 0
+        logging.info(f"Starting cycle number {cycle}")
 
-        # still needs to be modified!!!
+        
         # thread a sequence on binders
-        mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])}"
         if cycle > 1: 
-            mpnn_opts = f"--fixed_residues {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, target_length + 1)])}"
+            mpnn_opts = f"--fixed_residues {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, target_length + 1)]) + ' ' + ' '.join([f'C{i}' for i in range(1, target_length + 1)])}"
+            logging.info(f"Cycle number {cycle}: the fixed residues for LigandMPNN are: {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, target_length + 1)]) + ' ' + ' '.join([f'C{i}' for i in range(1, target_length + 1)])}")
+        else:
+            mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])}"
+            logging.info(f"Cycle number {cycle}: the fixed residues for LigandMPNN are: {' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])}")
+
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
         # relax poses
-        fr_options = "-parser:protocol /home/tripp/data/EGFR_binder/hotspot_binder/fastrelax_interaction.xml -beta"
+        fr_options = "-parser:protocol /home/student300/projects/protflow_binder_pipeline/hotspot_binder/create_rosetta_xml/relax_binder.xml -beta"
         rosetta.run(poses=poses, prefix=f"cycle_{cycle}_thread_rlx", nstruct=3, options=fr_options, rosetta_application="rosetta_scripts.default.linuxgccrelease")
+        logging.info(f"Cycle number {cycle}: relaxing poses complete")
 
         # calculate composite score
         # replace sap with shape complementarity & interaction area
-        poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score", f"cycle_{cycle}_thread_rlx_total_score", f"cycle_{cycle}_thread_rlx_interaction_score_interaction_energy"], weights =  [1,2,3], plot=True) 
+        poses.calculate_composite_score(name=f"cycle_{cycle}_threading_comp_score", scoreterms=[f"cycle_{cycle}_thread_rlx_sap_score",  f"cycle_{cycle}_thread_rlx_total_score", 
+        f"cycle_{cycle}_thread_rlx_intE_interaction_energy", f"cycle_{cycle}_thread_rlx_shape_complementarity"], 
+        weights =  [1,2,2,-1], plot=True) 
+        
+
 
         # filter to top sequence
         poses.filter_poses_by_rank(n=1, score_col=f"cycle_{cycle}_threading_comp_score", remove_layers=2)
 
         # generate sequences for relaxed poses
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_mpnn", nseq=50, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
-
+        logging.info(f"Cycle number {cycle}: LigandMPNN for relaxed poses complete.")
         poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_complex_fasta", update_poses=False)
         
         # if there is a C terminal stub to add to the binder fasta it is added here in the first cycle:
         if cycle == 1:
-            add_sequence_to_fasta("cycle_{cycle}_complex_fasta_fasta_location", args.binder_cterm_stub)
+            add_sequence_to_fasta(poses, f"cycle_{cycle}_complex_fasta_fasta_location", args.binder_cterm_stub)
 
 
         # remove target chain
@@ -187,10 +194,11 @@ def main(args):
         poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_fasta", update_poses=True)
         # if there is a C terminal stub to add to the binder fasta it is added here in the first cycle:
         if cycle == 1:
-            add_sequence_to_fasta("cycle_{cycle}_fasta_fasta_location", args.binder_cterm_stub)
+            add_sequence_to_fasta(poses, f"cycle_{cycle}_fasta_fasta_location", args.binder_cterm_stub)
 
         # predict
         esmfold.run(poses=poses, prefix=f"cycle_{cycle}_esm")
+        logging.info(f"Cycle number {cycle}: ESM prediction complete")
 
         # filter for predictions with high confidence
         esm_plddt_cutoff = ramp_cutoff(args.opt_plddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
@@ -218,6 +226,7 @@ def main(args):
         # predict complexes
         colabfold_opts = "--num-models 3 --msa-mode single_sequence"
         colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts)
+        logging.info(f"Cycle number {cycle}: Colabfold complete")
 
         # filter for predictions with good AF2 plddt
         af2_plddt_cutoff = ramp_cutoff(args.opt_plddt_cutoff_start, args.opt_plddt_cutoff_end, cycle, args.opt_cycles)
@@ -234,6 +243,7 @@ def main(args):
         for res in hotspot_list:
             rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
             rescontacts_calculator.run(poses=poses, prefix=f"cycle_{cycle}_hotspot_{res}_contacts", options=rescontact_opts)
+        logging.info(f"Cycle number {cycle}: the hotspot contacts are {hotspot_list}")
 
         # calculate overall hotspot contacts
         poses.df[f"cycle_{cycle}_hotspot_contacts"] = sum([poses.df[f"cycle_{cycle}_hotspot_{res}_contacts_data"] for res in hotspot_list])
@@ -242,7 +252,8 @@ def main(args):
         poses.filter_poses_by_value(score_col=f"cycle_{cycle}_hotspot_contacts", value=20, operator=">", prefix=f"cycle_{cycle}_hotspots_contacts", plot=True)
 
         # calculate the PAE interaction:
-        poses = calculate_poses_interaction_pae(prefix=f"cycle_{cycle}", poses=poses, pae_list_col=f"cycle_{cycle}_af2_pae_list", binder_length=150)
+        poses = calculate_poses_interaction_pae(prefix=f"cycle_{cycle}", poses=poses, pae_list_col=f"cycle_{cycle}_af2_pae_list", 
+        binder_start = args.binder_start, binder_end = args.binder_end, target_start = args.target_start, target_end = args.target_end)
 
         poses.save_scores()
 
@@ -275,8 +286,16 @@ def main(args):
         poses.save_poses(os.path.join(poses.work_dir, f"cycle_{cycle}_output"))
         poses.save_scores(os.path.join(poses.work_dir, f"cycle_{cycle}_scores.json"))
 
-    # relax all structures & calculate shape complementarity, interaction area & delta scores
 
+    # relax all structures & calculate shape complementarity, interaction area & delta scores
+    fr_options = "-parser:protocol /home/student300/projects/protflow_binder_pipeline/hotspot_binder/create_rosetta_xml/relax_binder.xml -beta"
+    rosetta.run(poses=poses, prefix=f"final_thread_rlx", nstruct=3, options=fr_options, rosetta_application="rosetta_scripts.default.linuxgccrelease")
+    logging.info(f"After all {cycle} cycles are completed final relaxing poses is complete")
+
+    # calculate a final composite score:
+    poses.calculate_composite_score(name=f"final_threading_comp_score", scoreterms=[f"final_thread_rlx_sap_score",  f"final_thread_rlx_total_score", 
+        f"final_thread_rlx_intE_interaction_energy", f"final_thread_rlx_shape_complementarity", "final_thread_rlx_shape_complementarity_int_area"], 
+        weights =  [1,2,2,-1, -2], plot=True)
 
 if __name__ == "__main__":
     import argparse
