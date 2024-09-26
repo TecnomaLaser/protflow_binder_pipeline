@@ -51,9 +51,18 @@ def add_sequence_to_fasta(poses, fasta_location:str, sequence_to_add:str) -> Non
         header = contents[0]
         sequence = contents[1]
         # chains are separated by a colon
-        new_content = header + sequence.split(":")[0] + sequence_to_add + ":" + ":".join([f"{i}" for i in sequence.split(":")[1:]])
+        new_content = header + sequence + sequence_to_add #+ ":" + ":".join([f"{i}" for i in sequence.split(":")[1:]])
         with open(fasta, "w") as f:
             f.write(new_content)
+
+def get_resnum_chain(res):
+    if int(res[1:]) >= 1000:
+        resnum = int(res[1:]) - 1000
+        chain = "C"
+    else:
+        resnum = int(res[1:])
+        chain = "B"
+    return resnum, chain
 
 
 def main(args):
@@ -132,7 +141,7 @@ def main(args):
     for res in hotspot_residues_postdiffusion.to_list():
         poses.filter_poses_by_value(score_col=f"hotspot_{res}_contacts_data", value=args.per_hotspot_contacts_cutoff, operator=">=", prefix=f"rfdiff_{res}_hotspot_contacts", plot=True)
 
-    poses.calculate_composite_score(name="comp_score_before_opt", scoreterms=["rfdiff_rog_data", "hotspot_contacts", "dssp_L_content"], weights=[1,-2,1], plot=True)
+    poses.calculate_composite_score(name="comp_score_before_opt", scoreterms=["rfdiff_rog_data", "hotspot_contacts", "dssp_L_content", "rfdiff_contacts_contacts"], weights=[1, -3, 1, -1], plot=True)
 
     poses.filter_poses_by_rank(score_col = "comp_score_before_opt", n = args.num_opt_input_poses, prefix = "comp_score", plot = True)
 
@@ -153,7 +162,7 @@ def main(args):
         
         # thread a sequence on binders
         if cycle > 1: 
-            mpnn_opts = f"--fixed_residues {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, target_length + 1)]) + ' ' + ' '.join([f'C{i}' for i in range(1, target_length + 1)])}"
+            mpnn_opts = f"--fixed_residues {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, len(args.target_sequence.split(":")[1]) + 1)]) + ' ' + ' '.join([f'C{i}' for i in range(1, len(args.target_sequence.split(":")[2]) + 1)])}"
             logging.info(f"Cycle number {cycle}: the fixed residues for LigandMPNN are: {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, target_length + 1)]) + ' ' + ' '.join([f'C{i}' for i in range(1, target_length + 1)])}")
         else:
             mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])}"
@@ -180,15 +189,18 @@ def main(args):
         # generate sequences for relaxed poses
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_mpnn", nseq=50, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
         logging.info(f"Cycle number {cycle}: LigandMPNN for relaxed poses complete.")
-        poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_complex_fasta", update_poses=False)
+        #poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_complex_fasta", update_poses=False)
         
         # if there is a C terminal stub to add to the binder fasta it is added here in the first cycle:
-        if cycle == 1:
-            add_sequence_to_fasta(poses, f"cycle_{cycle}_complex_fasta_fasta_location", args.binder_cterm_stub)
+        #if cycle == 1:
+        #    add_sequence_to_fasta(poses, f"cycle_{cycle}_complex_fasta_fasta_location", args.binder_cterm_stub)
 
 
         # remove target chain
-        chain_remover.run(poses=poses, prefix=f"cycle_{cycle}_rm_target", chains=["B","C"])
+        if cycle > 1:
+            chain_remover.run(poses=poses, prefix=f"cycle_{cycle}_rm_target", chains=["B","C"])
+        else:
+            chain_remover.run(poses=poses, prefix=f"cycle_{cycle}_rm_target", chains=["B"])
       
         # write .fasta files without target
         poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_fasta", update_poses=True)
@@ -214,16 +226,21 @@ def main(args):
         poses.calculate_composite_score(name=f"cycle_{cycle}_esm_composite_score", scoreterms=[f"cycle_{cycle}_tm_TM_score_ref", f"cycle_{cycle}_esm_plddt"], weights=[-1,-2], plot=True)
 
         # filter to cycle input poses
-        poses.filter_poses_by_rank(n=int(15 / cycle), score_col=f"cycle_{cycle}_esm_composite_score", remove_layers=3, plot=True, prefix=f"cycle_{cycle}_esm_comp_per_bb")
+        poses.filter_poses_by_rank(n=15, score_col=f"cycle_{cycle}_esm_composite_score", remove_layers=3, plot=True, prefix=f"cycle_{cycle}_esm_comp_per_bb")
 
         # filter for maximum number of input poses for af2 (use less input poses for each cycle as it takes too much time otherwise)
-        poses.filter_poses_by_rank(n=int(1000 / cycle), score_col=f"cycle_{cycle}_esm_composite_score", prefix=f"cycle_{cycle}_esm_comp", plot=True)
+        poses.filter_poses_by_rank(n=500, score_col=f"cycle_{cycle}_esm_composite_score", prefix=f"cycle_{cycle}_esm_comp", plot=True)
 
         # set .fastas including target as poses
-        poses.df["poses"] = poses.df[f"cycle_{cycle}_complex_fasta_fasta_location"]
-        poses.parse_descriptions(poses=poses.df["poses"].to_list())
+        #poses.df["poses"] = poses.df[f"cycle_{cycle}_complex_fasta_fasta_location"]
+        #poses.parse_descriptions(poses=poses.df["poses"].to_list())
 
-        # predict complexes
+
+        # add the complete target sequence to the fasta file:
+        poses.convert_pdb_to_fasta(prefix=f"cycle_{cycle}_complex_fasta", update_poses=True)
+        add_sequence_to_fasta(poses, f"cycle_{cycle}_complex_fasta_fasta_location", args.target_sequence)
+
+        # predict complexes with ColabFold
         colabfold_opts = "--num-models 3 --msa-mode single_sequence"
         colabfold.run(poses=poses, prefix=f"cycle_{cycle}_af2", options=colabfold_opts)
         logging.info(f"Cycle number {cycle}: Colabfold complete")
@@ -240,16 +257,25 @@ def main(args):
 
         ## to confirm that the binder is at the correct target position check the hotspot contacts:
         # calculate general contacts and hotspot contacts
-        for res in hotspot_list:
-            rescontact_opts={"max_distance": 12, "target_chain": "B", "partner_chain": "A", "target_resnum": int(res[1:]), "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
-            rescontacts_calculator.run(poses=poses, prefix=f"cycle_{cycle}_hotspot_{res}_contacts", options=rescontact_opts)
-        logging.info(f"Cycle number {cycle}: the hotspot contacts are {hotspot_list}")
+        tmp = []
+        #logging.info(f"hotspot_residues_original: {type(hotspot_residues_original.to_list())}, {type(hotspot_residues_original.to_list()[0])}")
+        for res in hotspot_residues_original.to_list():
+            logging.info(f"{res}")
+            resnum, chain = get_resnum_chain(res)
+            logging.info(f"{resnum}, {chain}, {type(chain)}")
+            tmp.append([chain, resnum])
+            rescontact_opts={"max_distance": 12, "target_chain": chain, "partner_chain": "A", "target_resnum": resnum, "target_atom_names": ["CA"], "partner_atom_names": ["CA"]}
+            rescontacts_calculator.run(poses=poses, prefix=f"cycle_{cycle}_hotspot_{chain+str(resnum)}_contacts", options=rescontact_opts)
+
+        logging.info(f"Cycle number {cycle}: the hotspot contacts are {tmp}")
 
         # calculate overall hotspot contacts
-        poses.df[f"cycle_{cycle}_hotspot_contacts"] = sum([poses.df[f"cycle_{cycle}_hotspot_{res}_contacts_data"] for res in hotspot_list])
-        
+        poses.df[f"cycle_{cycle}_hotspot_contacts"] = sum([poses.df[f"cycle_{cycle}_hotspot_{res}_contacts_data"] for res in hotspot_residues_original.to_list()])
+
         # filter out all poses where the contact between target and binder is not given (defined by at least 20 contacts):
         poses.filter_poses_by_value(score_col=f"cycle_{cycle}_hotspot_contacts", value=20, operator=">", prefix=f"cycle_{cycle}_hotspots_contacts", plot=True)
+        logging.info(f"The cycle_{cycle}_hotspot_contacts {poses.df[f"cycle_{cycle}_hotspot_contacts"]}")
+        
 
         # calculate the PAE interaction:
         poses = calculate_poses_interaction_pae(prefix=f"cycle_{cycle}", poses=poses, pae_list_col=f"cycle_{cycle}_af2_pae_list", 
@@ -321,6 +347,7 @@ if __name__ == "__main__":
     argparser.add_argument("--target_end", type=int, default=200, help="Last amino acid of the target")
     argparser.add_argument("--num_opt_input_poses", type=int, default=150, help="The number of input poses optimized")
     argparser.add_argument("--binder_cterm_stub", type=str, default="", help="Add C-terminal residues to sequences pre-ESM and pre-AF2 predictions in 1 AA letter code (e.g. MGHHHH). For the 218 linker for the CD20 binder design it is GSTSGSGKPGSGEGSTKG")
+    argparser.add_argument("--args.target_sequence", type=str, default=":MTTPRNSVNGTFPAEPMKGPIAMQSGPKPLFRRMSSLVGPTQSFFMRESKTLGAVQIMNGLFHIALGGLLMIPAGIYAPICVTVWYPLWGGIMYIISGSLLAATEKNSRKCLVKGKMIMNSLSLFAAISGMILSIMDILNIKISHFLKMESLNFIRAHTPYINIYNCEPANPSEKNSPSTQYCYSIQSLFLGILSVMLIFAFFQELVIAGIVENEWKRTCSRPKSNIVLLSAEEKKEQTIEIKEEVVGLTETSSQPKNEEDIEIIPIQEEEEEETETNFPEPPQDQESSPIENDSSP:MTTPRNSVNGTFPAEPMKGPIAMQSGPKPLFRRMSSLVGPTQSFFMRESKTLGAVQIMNGLFHIALGGLLMIPAGIYAPICVTVWYPLWGGIMYIISGSLLAATEKNSRKCLVKGKMIMNSLSLFAAISGMILSIMDILNIKISHFLKMESLNFIRAHTPYINIYNCEPANPSEKNSPSTQYCYSIQSLFLGILSVMLIFAFFQELVIAGIVENEWKRTCSRPKSNIVLLSAEEKKEQTIEIKEEVVGLTETSSQPKNEEDIEIIPIQEEEEEETETNFPEPPQDQESSPIENDSSP")
 
     # optimization optionals
     argparser.add_argument("--opt_cycles", type=int, default=3, help="The number of optimization cycles performed.")
