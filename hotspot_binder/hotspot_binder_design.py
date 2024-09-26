@@ -183,8 +183,6 @@ def main(args):
         f"cycle_{cycle}_thread_rlx_intE_interaction_energy", f"cycle_{cycle}_thread_rlx_shape_complementarity"], 
         weights =  [1,2,2,-1], plot=True) 
         
-
-
         # filter to top sequence
         poses.filter_poses_by_rank(n=1, score_col=f"cycle_{cycle}_threading_comp_score", remove_layers=2)
 
