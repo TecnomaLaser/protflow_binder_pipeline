@@ -161,12 +161,14 @@ def main(args):
 
         
         # thread a sequence on binders
-        if cycle > 1: 
-            mpnn_opts = f"--fixed_residues {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, len(args.target_sequence.split(":")[1]) + 1)]) + ' ' + ' '.join([f'C{i}' for i in range(1, len(args.target_sequence.split(":")[2]) + 1)])}"
-            logging.info(f"Cycle number {cycle}: the fixed residues for LigandMPNN are: {' '.join([f'A{i}' for i in range(binder_length, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, target_length + 1)]) + ' ' + ' '.join([f'C{i}' for i in range(1, target_length + 1)])}")
+        if cycle > 1:
+            fixed_residues = ' '.join([f'A{i}' for i in range(args.binder_length + 1, len(args.binder_cterm_stub) + 1)]) + ' ' + ' '.join([f'B{i}' for i in range(1, len(args.target_sequence.split(":")[1]) + 1)]) + ' ' + ' '.join([f'C{i}' for i in range(1, len(args.target_sequence.split(":")[2]) + 1)])
+            mpnn_opts = f"--fixed_residues {fixed_residues}"
+            logging.info(f"Cycle number {cycle}: the fixed residues for LigandMPNN are: {fixed_residues}")
         else:
-            mpnn_opts = f"--fixed_residues {' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])}"
-            logging.info(f"Cycle number {cycle}: the fixed residues for LigandMPNN are: {' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])}")
+            fixed_residues = ' '.join([f'B{i}' for i in range(1+args.binder_length, target_length + 1 + args.binder_length)])
+            mpnn_opts = f"--fixed_residues {fixed_residues}"
+            logging.info(f"Cycle number {cycle}: the fixed residues for LigandMPNN are: {fixed_residues}")
 
         ligandmpnn.run(poses=poses, prefix=f"cycle_{cycle}_seq_thread", nseq=5, model_type="soluble_mpnn", options=mpnn_opts, return_seq_threaded_pdbs_as_pose=True)
 
